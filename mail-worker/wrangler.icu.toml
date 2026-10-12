@@ -1,0 +1,25 @@
+name = "bewatermail-icu"
+main = "src/index.js"
+account_id = "c7d63b2c519d2b9fb8bd383bb74889bd"
+compatibility_date = "2025-06-04"
+workers_dev = true
+keep_vars = true
+[observability]
+enabled = true
+[[d1_databases]]
+binding = "db"
+database_name = "bewatermail-icu-db"
+database_id = "94d12ada-0a5d-4eda-a70e-004f2fba75da"
+[[kv_namespaces]]
+binding = "kv"
+id = "546e1dac81134b02975c4b3b298a655f"
+[assets]
+binding = "assets"
+directory = "./dist"
+not_found_handling = "single-page-application"
+run_worker_first = true
+[triggers]
+crons = ["0 * * * *"]
+[vars]
+domain = ["bewatermail.icu"]
+admin = "admin@bewatermail.icu"
