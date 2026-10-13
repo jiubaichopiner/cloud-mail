@@ -161,6 +161,7 @@ onUnmounted(() => {
 
 function handleKeyDown(event) {
   if (event.key !== 'Escape') return;
+  if ([...document.querySelectorAll('.mail-privacy-dialog')].some(node => node.getBoundingClientRect().width > 0)) return;
   if (showPreview.value) return;
   if (document.querySelector('.el-message-box')) return;
   const writeBox = document.querySelector('.write-box');
