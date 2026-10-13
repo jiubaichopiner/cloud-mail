@@ -1,4 +1,5 @@
 import { parseHTML } from 'linkedom';
+import { matchesMailTrackingRules, readMailTrackingRules } from './mail-tracking-rules.js';
 
 const PREFIX = 'mail-privacy:v1:';
 const TTL_SECONDS = 5 * 24 * 60 * 60;
@@ -11,12 +12,12 @@ const FETCH_TIMEOUT_MS = 5000;
 const knownTrackingPath = /(?:^|\/)(?:pixel|beacon|track(?:ing)?|open)(?:[\/_\.-]|$)|\/wf\/open(?:\?|$)/i;
 const knownTrackingParams = /^(?:open(?:_?id|_?track)?|track(?:ing)?_?(?:id|open)|pixel_?id)$/i;
 
-export function classifyMailImage(element, src) {
+export function classifyMailImage(element, src, rules) {
   const width = Number.parseFloat(element.getAttribute('width') || '');
   const height = Number.parseFloat(element.getAttribute('height') || '');
   const style = (element.getAttribute('style') || '').toLowerCase();
   if ((width > 0 && width <= 2) || (height > 0 && height <= 2) ||
-      /(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\D|$))/.test(style)) {
+      /(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\D|$)|(?:^|;)\s*(?:width|height)\s*:\s*[0-2](?:px)?(?:\s*!important)?\s*(?:;|$))/.test(style)) {
     return 'hidden-pixel';
   }
   try {
@@ -25,6 +26,7 @@ export function classifyMailImage(element, src) {
       return 'suspected-tracker';
     }
   } catch { /* Invalid URLs are blocked by the URL gate. */ }
+  if (matchesMailTrackingRules(src, rules)) return 'mail-tracking-list';
   return '';
 }
 
@@ -107,26 +109,40 @@ async function hashUrl(src) {
 function binaryKey(emailId, hash) { return `${PREFIX}image:${emailId}:${hash}`; }
 function manifestKey(emailId) { return `${PREFIX}manifest:${emailId}`; }
 
-export async function preloadMailImages(env, emailId, html, fetcher = fetch) {
+async function scanMailImages(html, rules) {
   const manifest = { version: 1, images: [], loaded: 0, trackers: 0 };
-  if (!html || !env.kv || !emailId) return manifest;
+  if (!html) return manifest;
   const { document } = parseHTML(html.slice(0, MAX_HTML_CHARS));
-  const seen = new Set();
-  const candidates = [];
-  const ownDomains = Array.isArray(env.domain) ? env.domain : JSON.parse(env.domain || '[]');
+  const seen = new Map();
   for (const img of document.querySelectorAll('img[src]')) {
     const url = img.getAttribute('src') || '';
-    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
-    seen.add(url);
-    if (manifest.images.length >= 60) break;
-    const hash = await hashUrl(url);
-    const reason = classifyMailImage(img, url);
-    const entry = { hash, url, status: reason ? 'tracker' : 'blocked', reason };
-    if (reason) manifest.trackers++;
-    else if (isPublicImageUrl(url, ownDomains) && candidates.length < MAX_IMAGES_PER_MESSAGE) candidates.push(entry);
-    manifest.images.push(entry);
+    if (!/^https?:\/\//i.test(url)) continue;
+    let entry = seen.get(url);
+    if (!entry) {
+      if (manifest.images.length >= 60) continue;
+      entry = {hash: await hashUrl(url), url, status: 'blocked', reason: ''};
+      seen.set(url, entry);
+      manifest.images.push(entry);
+    }
+    const reason = classifyMailImage(img, url, rules);
+    // A hidden copy of the same URL takes precedence over a visible copy.
+    if (reason && entry.status !== 'tracker') {
+      entry.status = 'tracker';
+      entry.reason = reason;
+      manifest.trackers++;
+    }
   }
+  return manifest;
+}
+
+export async function preloadMailImages(env, emailId, html, fetcher = fetch) {
+  const empty = { version: 1, images: [], loaded: 0, trackers: 0 };
+  if (!html || !env.kv || !emailId) return empty;
+  const rules = await readMailTrackingRules(env);
+  const manifest = await scanMailImages(html, rules);
+  const ownDomains = Array.isArray(env.domain) ? env.domain : JSON.parse(env.domain || '[]');
   if (!manifest.images.length) return manifest;
+  const candidates = manifest.images.filter(entry => entry.status !== 'tracker' && isPublicImageUrl(entry.url, ownDomains)).slice(0, MAX_IMAGES_PER_MESSAGE);
 
   // One shared-account KV write counter per incoming message. A failed/quota-limited
   // counter or cache write leaves images blocked; mail delivery never depends on it.
@@ -167,8 +183,18 @@ export async function getMailImageManifest(c, emailId, userId, emailService) {
   if (!Number.isSafeInteger(emailId) || emailId <= 0) return null;
   const email = await emailService.selectById(c, emailId);
   if (!email || (email.userId !== userId && c.env.admin !== c.get('user').email)) return null;
+  const rules = await readMailTrackingRules(c.env);
   const manifest = await c.env.kv.get(manifestKey(emailId), { type: 'json' });
-  return manifest?.version === 1 ? manifest : { version: 1, images: [], loaded: 0, trackers: 0 };
+  // Older messages have no prefetch record. They still receive current tracker
+  // classification when opened, but never make an origin request on opening.
+  const current = await scanMailImages(email.content, rules);
+  if (manifest?.version !== 1) return current;
+  const classifications = new Map(current.images.filter(image => image.status === 'tracker').map(image => [image.url, image.reason]));
+  const images = manifest.images.map(image => classifications.has(image.url)
+    ? {...image, status: 'tracker', reason: classifications.get(image.url)} : image);
+  return {...manifest, images,
+    loaded: images.filter(image => image.status === 'cached').length,
+    trackers: images.filter(image => image.status === 'tracker').length};
 }
 
 export async function getMailImage(c, emailId, hash, userId, emailService) {

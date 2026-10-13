@@ -4,7 +4,7 @@ import { preloadMailImages, getMailImageManifest, getMailImage } from '../src/se
 
 const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aJVkAAAAASUVORK5CYII=', 'base64'));
 
-function fixture() {
+function fixture(content = '') {
   const values = new Map();
   const metadata = new Map();
   const kv = {
@@ -23,7 +23,7 @@ function fixture() {
   };
   const env = {kv, domain: ['bewatermail.com'], admin: 'admin@bewatermail.com'};
   const c = {env, get: () => ({email: 'user@bewatermail.com'})};
-  const emailService = {selectById: async () => ({emailId: 42, userId: 7})};
+  const emailService = {selectById: async () => ({emailId: 42, userId: 7, content})};
   return {env, c, emailService, values};
 }
 
@@ -89,4 +89,31 @@ test('redirects to private addresses and false MIME types do not cache bytes', a
   assert.equal(result.loaded, 0);
   assert.deepEqual(urls, ['https://assets.example.net/banner.png']);
   assert.equal([...values.keys()].some(key => key.startsWith('mail-privacy:v1:image:44:')), false);
+});
+
+test('new list rules reclassify old cached images and old Claude mail without loading the origin', async () => {
+  const claudePixel = 'https://url8792.mail.anthropic.com/wf/open?upn=synthetic';
+  const previouslyCached = 'https://ct.sendgrid.net/image.png';
+  const html = `<img src="${previouslyCached}"><img src="${claudePixel}" width="1" height="1">`;
+  const {env, c, emailService, values} = fixture(html);
+  let requests = 0;
+  await preloadMailImages(env, 42, html, async () => {
+    requests++;
+    return new Response(png, {headers: {'Content-Type': 'image/png'}});
+  });
+  assert.equal(requests, 1);
+  const raw = '! Homepage: https://github.com/AdguardTeam/AdGuardFilters\n' +
+    '/wf/open?upn=$image\nct.sendgrid.net$image';
+  values.set('mail-privacy:v1:adguard-mail-rules', JSON.stringify({raw, updatedAt: Date.now()}));
+  const manifest = await getMailImageManifest(c, 42, 7, emailService);
+  assert.equal(manifest.trackers, 2);
+  assert.equal(manifest.loaded, 0);
+  const cachedHash = manifest.images.find(image => image.url === previouslyCached).hash;
+  assert.equal(await getMailImage(c, 42, cachedHash, 7, emailService), null);
+
+  values.delete('mail-privacy:v1:manifest:42');
+  const oldMail = await getMailImageManifest(c, 42, 7, emailService);
+  assert.equal(oldMail.trackers, 2);
+  assert.equal(oldMail.loaded, 0);
+  assert.equal(requests, 1, 'opening old mail must not fetch remote content');
 });
