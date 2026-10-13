@@ -50,7 +50,7 @@ window.runPrivacyChecks=async()=>{
   const img=f.contentDocument.querySelector('img')
   check('embedded image decoded',img?.complete&&img?.naturalWidth===1)
   const readerHost=document.createElement('div');readerHost.style.width='600px';document.body.append(readerHost)
-  createApp({render:()=>h(ShadowHtml,{html:hostile})}).mount(readerHost)
+  createApp({render:()=>h(ShadowHtml,{html:hostile})}).use(createPinia()).mount(readerHost)
   await new Promise(r=>setTimeout(r,300))
   check('real Vue reader displays privacy notice',readerHost.innerText.includes('隐私保护已开启'))
   const reader=readerHost.querySelector('iframe')
@@ -71,6 +71,49 @@ window.runPrivacyChecks=async()=>{
   check('paste strips external images and CSS',!pasted.content.includes(trap))
   await new Promise(r=>setTimeout(r,400))
   check('real components initiated no tracker requests',!performance.getEntriesByType('resource').some(e=>isTrackerRequest(e.name)))
+  const tracker='https://example.invalid/open.gif?open_id=123'
+  const banner='https://cdn.example.net/banner.png'
+  const photo=URL.createObjectURL(new Blob([Uint8Array.from(atob(png.split(',')[1]),c=>c.charCodeAt(0))],{type:'image/png'}))
+  const enhanced=sanitizeMailHtml(`<img src="${tracker}" width="1"><img src="${banner}" alt="banner"><a href="https://example.com/verify?utm_source=newsletter&fbclid=abc&id=7">visit</a>`,{proxiedImages:{[banner]:photo},knownTrackers:[tracker]})
+  check('known tracking parameters are cleaned',enhanced.cleanedLinks===1&&enhanced.html.includes('id=7')&&!enhanced.html.includes('utm_source')&&!enhanced.html.includes('fbclid'))
+  check('signed login links stay intact',sanitizeMailHtml('<a href="https://example.com/login?token=secret&utm_source=mail">login</a>').html.includes('utm_source=mail'))
+  check('proxy blob shows ordinary image while tiny tracker stays blocked',enhanced.safeRemoteImages===1&&enhanced.blockedImages===1&&enhanced.blockedTrackerImages===1&&enhanced.html.includes(photo))
+  const enhancedFrame=await frame(privateMailDocument(enhanced.html))
+  check('cached raster image decodes without visiting remote origin',enhancedFrame.contentDocument.querySelector('img')?.naturalWidth===1)
+  URL.revokeObjectURL(photo)
+  const originalFetch=window.fetch
+  const originalToken=localStorage.getItem('token')
+  const apiCalls=[]
+  window.fetch=(input,options={})=>{
+    const path=String(input)
+    if(path.startsWith('/api/email/privacy/manifest')){
+      apiCalls.push({path,authorization:options.headers?.Authorization})
+      return Promise.resolve(new Response(JSON.stringify({code:200,data:{version:1,trackers:1,images:[
+        {url:tracker,status:'tracker',reason:'hidden-pixel',hash:'a'.repeat(32)},
+        {url:banner,status:'cached',mime:'image/png',hash:'b'.repeat(32)}
+      ]}}),{headers:{'Content-Type':'application/json'}}))
+    }
+    if(path==='/api/email/privacy/image'){
+      apiCalls.push({path,authorization:options.headers?.Authorization})
+      return Promise.resolve(new Response(Uint8Array.from(atob(png.split(',')[1]),c=>c.charCodeAt(0)),{headers:{'Content-Type':'image/png'}}))
+    }
+    return originalFetch(input,options)
+  }
+  localStorage.setItem('token','privacy-test-token')
+  localStorage.removeItem('mail-privacy-mode:guest')
+  const enhancedHost=document.createElement('div');enhancedHost.style.width='600px';document.body.append(enhancedHost)
+  const enhancedApp=createApp({render:()=>h(ShadowHtml,{emailId:99,html:`<img src="${tracker}" width="1"><img src="${banner}" alt="banner">`})})
+  enhancedApp.use(createPinia()).mount(enhancedHost)
+  await until(()=>enhancedHost.textContent.includes('已显示 1 张代理缓存图片'))
+  check('real reader fetches only own API using its login token',apiCalls.length>=2&&apiCalls.every(c=>c.authorization==='privacy-test-token'&&c.path.startsWith('/api/email/privacy/')))
+  check('real reader shows cached image without double-counting tracker',enhancedHost.querySelector('iframe')?.contentDocument?.querySelectorAll('img').length===1&&enhancedHost.textContent.includes('已识别并拦截 1 张')&&!enhancedHost.textContent.includes('另有'))
+  enhancedHost.querySelector('button').click()
+  await until(()=>enhancedHost.textContent.includes('严格模式'))
+  check('strict mode hides cached remote image without fetching origin',enhancedHost.querySelector('iframe')?.contentDocument?.querySelectorAll('img').length===0)
+  enhancedApp.unmount()
+  window.fetch=originalFetch
+  if(originalToken===null)localStorage.removeItem('token');else localStorage.setItem('token',originalToken)
+  localStorage.removeItem('mail-privacy-mode:guest')
   const hits=await (await fetch(`${trap}/hits`)).json()
   check('collector received zero email tracking requests',hits.every(path=>path==='/control'))
   document.querySelector('#result').textContent=JSON.stringify(results,null,2)

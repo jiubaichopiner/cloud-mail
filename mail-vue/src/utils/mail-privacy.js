@@ -49,10 +49,28 @@ export function escapeMailText(value = '') {
   return String(value).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]))
 }
 
-export function sanitizeMailHtml(html, {origin = location.origin, allowBlob = false} = {}) {
+const trackingKeys = /^(?:utm_[a-z\d_]+|fbclid|gclid|dclid|msclkid|igshid|mc_cid|mc_eid|mkt_tok|vero_conv|vero_id|oly_anon_id|oly_enc_id)$/i
+const signedKeys = /^(?:token|code|state|signature|sig|jwt|auth|api_?key|x-amz-signature)$/i
+
+export function cleanTrackingLink(raw, origin = location.origin) {
+  const url = new URL(raw, `${origin}/`)
+  if (!['http:', 'https:'].includes(url.protocol)) return {url: raw, cleaned: false}
+  // Authentication and signed URLs can break when any query parameter changes.
+  if ([...url.searchParams.keys()].some(key => signedKeys.test(key))) return {url: raw, cleaned: false}
+  const original = [...url.searchParams.keys()]
+  for (const key of original) if (trackingKeys.test(key)) url.searchParams.delete(key)
+  const cleaned = original.length !== [...url.searchParams.keys()].length
+  return {url: cleaned ? url.href : raw, cleaned}
+}
+
+export function sanitizeMailHtml(html, {origin = location.origin, allowBlob = false, proxiedImages = {}, knownTrackers = []} = {}) {
   const purify = createDOMPurify(window)
   const imageSources = new WeakMap()
+  const trackerUrls = new Set(knownTrackers)
   let blockedImages = 0
+  let blockedTrackerImages = 0
+  let safeRemoteImages = 0
+  let cleanedLinks = 0
   purify.addHook('beforeSanitizeAttributes', node => {
     if (node.nodeName === 'IMG') imageSources.set(node, node.getAttribute('src') || '')
   })
@@ -69,15 +87,19 @@ export function sanitizeMailHtml(html, {origin = location.origin, allowBlob = fa
   })
   for (const img of fragment.querySelectorAll('img')) {
     const src = imageSources.get(img) || ''
-    const safe = safeImageSource(src, origin, allowBlob)
+    const local = safeImageSource(src, origin, allowBlob)
+    const hidden = img.style.display === 'none' || img.style.opacity === '0' ||
+      (Number(img.getAttribute('width')) > 0 && Number(img.getAttribute('width')) <= 2) ||
+      (Number(img.getAttribute('height')) > 0 && Number(img.getAttribute('height')) <= 2)
+    const cached = !hidden && Object.hasOwn(proxiedImages, src) ? safeImageSource(proxiedImages[src], origin, true) : ''
+    const safe = local || cached
     if (safe) {
       img.setAttribute('src', safe)
       img.setAttribute('referrerpolicy', 'no-referrer')
+      if (cached) safeRemoteImages++
     } else {
       if (src) blockedImages++
-      const hidden = img.style.display === 'none' || img.style.opacity === '0' ||
-        (Number(img.getAttribute('width')) > 0 && Number(img.getAttribute('width')) <= 2) ||
-        (Number(img.getAttribute('height')) > 0 && Number(img.getAttribute('height')) <= 2)
+      if (src && trackerUrls.has(src)) blockedTrackerImages++
       if (hidden) img.remove()
       else {
         const placeholder = document.createElement('span')
@@ -92,7 +114,9 @@ export function sanitizeMailHtml(html, {origin = location.origin, allowBlob = fa
     try {
       const url = new URL(a.getAttribute('href') || '', `${origin}/`)
       if (!['https:', 'http:', 'mailto:', 'tel:'].includes(url.protocol)) throw new Error('unsafe link')
-      a.setAttribute('href', url.href)
+      const cleaned = cleanTrackingLink(a.getAttribute('href'), origin)
+      a.setAttribute('href', cleaned.url)
+      if (cleaned.cleaned) cleanedLinks++
       a.setAttribute('target', '_blank')
       a.setAttribute('rel', 'noopener noreferrer')
       a.setAttribute('referrerpolicy', 'no-referrer')
@@ -100,11 +124,11 @@ export function sanitizeMailHtml(html, {origin = location.origin, allowBlob = fa
   }
   const holder = document.createElement('div')
   holder.append(fragment)
-  return {html: holder.innerHTML, blockedImages}
+  return {html: holder.innerHTML, blockedImages, blockedTrackerImages, safeRemoteImages, cleanedLinks}
 }
 
 export function privateMailDocument(sanitizedHtml, origin = location.origin) {
-  const policy = `default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: ${origin}/attachments/; font-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; media-src 'none'; form-action 'none'; base-uri 'none'`
+  const policy = `default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob: ${origin}/attachments/; font-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; media-src 'none'; form-action 'none'; base-uri 'none'`
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeMailText(policy)}"><meta name="referrer" content="no-referrer"><style>
     html,body{margin:0;padding:0;background:#fff;color:#13181d;font:14px/1.5 Inter,"Helvetica Neue",Helvetica,"PingFang SC","Microsoft YaHei",Arial,sans-serif;overflow:hidden;word-break:break-word}
     .mail-body{width:fit-content;min-width:100%;box-sizing:border-box}

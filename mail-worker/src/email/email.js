@@ -12,6 +12,7 @@ import userService from '../service/user-service';
 import telegramService from '../service/telegram-service';
 import aiService from '../service/ai-service';
 import webhookService from '../service/webhook-service';
+import { preloadMailImages } from '../service/mail-privacy-service';
 
 export async function email(message, env, ctx) {
 
@@ -157,6 +158,11 @@ export async function email(message, env, ctx) {
 		}
 
 		emailRow = await emailService.completeReceive({ env }, account ? emailConst.status.RECEIVE : emailConst.status.NOONE, emailRow.emailId);
+		// Start at receipt time, never when the recipient opens the message.
+		// Fail closed: image errors cannot change the SMTP delivery result.
+		if (emailRow?.emailId && emailRow.content && ctx?.waitUntil) {
+			ctx.waitUntil(Promise.resolve().then(() => preloadMailImages(env, emailRow.emailId, emailRow.content)).catch(() => {}));
+		}
 
 
 		if (ruleType === settingConst.ruleType.RULE) {
