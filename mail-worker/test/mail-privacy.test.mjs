@@ -117,3 +117,18 @@ test('new list rules reclassify old cached images and old Claude mail without lo
   assert.equal(oldMail.loaded, 0);
   assert.equal(requests, 1, 'opening old mail must not fetch remote content');
 });
+
+test('unified storage preserves separate image prefetch budgets for each recipient domain', async () => {
+  const {env, values} = fixture();
+  env.unified_mode = 'true';
+  env.domain = ['bewatermail.com', 'bewatermail.icu'];
+  const day = new Date().toISOString().slice(0,10);
+  values.set(`mail-privacy:v1:daily:${day}:bewatermail.com`, '20');
+  let calls = 0;
+  const fetcher = async () => {calls++; return new Response(png, {headers:{'Content-Type':'image/png'}});};
+  const html = '<img src="https://assets.example.net/banner.png">';
+  assert.equal((await preloadMailImages(env, 50, html, fetcher, 'bewatermail.com')).loaded, 0);
+  assert.equal((await preloadMailImages(env, 51, html, fetcher, 'bewatermail.icu')).loaded, 1);
+  assert.equal(calls, 1);
+  assert.equal(values.get(`mail-privacy:v1:daily:${day}:bewatermail.icu`), '1');
+});

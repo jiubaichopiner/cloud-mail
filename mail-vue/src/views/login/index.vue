@@ -11,11 +11,12 @@
     <div class="form-wrapper">
       <div class="container">
         <span class="form-title">{{ settingStore.settings.title }}</span>
+        <span v-if="domainList.length > 1" class="form-desc">三个域名，一个邮箱入口</span>
         <span class="form-desc" v-if="show === 'login'">{{ $t('loginTitle') }}</span>
         <span class="form-desc" v-else>{{ $t('regTitle') }}</span>
         <div v-show="show === 'login'">
           <el-input :class="!hideLoginDomain ? 'email-input' : ''" v-model="form.email"
-                    type="text" :placeholder="$t('emailAccount')" autocomplete="off" @keyup.enter="submit">
+                    type="text" placeholder="邮箱前缀或完整邮箱地址" autocomplete="off" @keyup.enter="submit">
             <template #append v-if="!hideLoginDomain">
               <div @click.stop="openSelect">
                 <el-select
@@ -221,6 +222,7 @@ const registerForm = reactive({
 const domainList = settingStore.domainList;
 const registerLoading = ref(false)
 suffix.value = domainList[0]
+if (domainList.includes('@' + route.query.domain)) suffix.value = '@' + route.query.domain
 const verifyShow = ref(false)
 let verifyToken = ''
 let turnstileId = null
@@ -278,7 +280,8 @@ const openSelect = () => {
 }
 
 const getFullEmail = (email) => {
-  return hideLoginDomain.value ? email : email + suffix.value
+  const address = email.trim()
+  return hideLoginDomain.value || address.includes('@') ? address : address + suffix.value
 }
 
 const getEmailName = (email) => {
@@ -442,8 +445,9 @@ async function saveToken(token) {
   localStorage.setItem('token', token)
   refreshWebsiteConfig()
   const user = await loginUserInfo();
-  accountStore.currentAccountId = user.account.accountId;
-  accountStore.currentAccount = user.account;
+  const combined = settingStore.domainList.length > 1;
+  accountStore.currentAccountId = combined ? 0 : user.account.accountId;
+  accountStore.currentAccount = combined ? {...user.account, allReceive: 1} : user.account;
   userStore.user = user;
   const routers = permsToRouter(user.permKeys);
   routers.forEach(routerData => {

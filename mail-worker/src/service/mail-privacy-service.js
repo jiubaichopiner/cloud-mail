@@ -135,7 +135,7 @@ async function scanMailImages(html, rules) {
   return manifest;
 }
 
-export async function preloadMailImages(env, emailId, html, fetcher = fetch) {
+export async function preloadMailImages(env, emailId, html, fetcher = fetch, recipientDomain = '') {
   const empty = { version: 1, images: [], loaded: 0, trackers: 0 };
   if (!html || !env.kv || !emailId) return empty;
   const rules = await readMailTrackingRules(env);
@@ -147,7 +147,8 @@ export async function preloadMailImages(env, emailId, html, fetcher = fetch) {
   // One shared-account KV write counter per incoming message. A failed/quota-limited
   // counter or cache write leaves images blocked; mail delivery never depends on it.
   const day = new Date().toISOString().slice(0, 10);
-  const dayKey = `${PREFIX}daily:${day}`;
+  const quotaDomain = env.unified_mode === 'true' && ownDomains.includes(recipientDomain) ? `:${recipientDomain}` : '';
+  const dayKey = `${PREFIX}daily:${day}${quotaDomain}`;
   let mayFetch = false;
   try {
     const used = Number(await env.kv.get(dayKey) || 0);

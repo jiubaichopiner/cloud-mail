@@ -26,7 +26,7 @@ app.post('/webhooks',async (c) => {
 		'bewatermail.icu': c.env.webhook_icu,
 		'bewatermail.asia': c.env.webhook_asia
 	};
-	if (destinations[domain]) {
+	if (c.env.unified_mode !== 'true' && destinations[domain]) {
 		return destinations[domain].fetch(`https://mail.${domain}/api/webhooks`, {
 			method: 'POST', headers: c.req.raw.headers, body: payload
 		});

@@ -12,6 +12,10 @@
                actionLeft="4px"
                @jump="jumpContent"
   >
+    <template #name="{email}">
+      <span v-if="accountStore.currentAccountId === 0 && email.toEmail" class="recipient-address" :title="email.toEmail">{{ email.toEmail.split('@').at(-1).split('.').at(-1).toUpperCase() }}</span>
+      <span>{{ email.name }}</span>
+    </template>
     <template #first>
       <Icon class="icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-down-outline"
             v-if="params.timeSort === 0" width="28" height="28"/>
@@ -152,6 +156,9 @@ function getEmailList(emailId, size) {
 }
 
 </script>
+<style scoped>
+.recipient-address {display:inline-block;margin-right:8px;padding:1px 6px;border-radius:5px;background:var(--el-fill-color-light);color:var(--el-text-color-secondary);font-size:10px;font-weight:400}
+</style>
 <style>
 .icon {
   cursor: pointer;

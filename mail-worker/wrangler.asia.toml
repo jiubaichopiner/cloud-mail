@@ -8,18 +8,21 @@ keep_vars = true
 enabled = true
 [[d1_databases]]
 binding = "db"
-database_name = "bewatermail-asia-db"
-database_id = "ab0711e5-1140-4358-82e4-3489d086dd99"
+database_name = "bewatermail-unified-db"
+database_id = "b34664be-9226-4245-af76-c199872185c7"
 [[kv_namespaces]]
 binding = "kv"
-id = "9b081a15994e448aa86ee8bc9dbeefac"
+id = "feafdfc307f0450a9a5eeda9bc8ce75a"
 [assets]
 binding = "assets"
 directory = "./dist"
 not_found_handling = "single-page-application"
 run_worker_first = true
 [triggers]
-crons = ["0 * * * *"]
+crons = []
 [vars]
-domain = ["bewatermail.asia"]
-admin = "admin@bewatermail.asia"
+domain = ["bewatermail.com", "bewatermail.icu", "bewatermail.asia"]
+admin = "admin@bewatermail.com"
+unified_mode = "true"
+canonical_host = "mail.bewatermail.com"
+migration_freeze = "false"

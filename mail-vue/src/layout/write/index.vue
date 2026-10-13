@@ -7,8 +7,10 @@
             <Icon icon="hugeicons:quill-write-01" width="28" height="28"/>
           </span>
           <span class="sender">{{ $t('sender') }}:</span>
-          <span class="sender-name">{{ form.name }}</span>
-          <span class="send-email"><{{ form.sendEmail }}></span>
+          <el-select v-if="settingStore.domainList.length > 1" v-model="form.accountId" class="sender-account-select" filterable :loading="senderLoading" @change="changeSender">
+            <el-option v-for="account in senderAccounts" :key="account.accountId" :value="account.accountId" :label="account.email" />
+          </el-select>
+          <template v-else><span class="sender-name">{{ form.name }}</span><span class="send-email"><{{ form.sendEmail }}></span></template>
         </div>
         <div @click="close" style="cursor: pointer;">
           <Icon icon="material-symbols-light:close-rounded" width="22" height="22"/>
@@ -115,6 +117,7 @@ import dayjs from "dayjs";
 import {useI18n} from "vue-i18n";
 import router from "@/router/index.js";
 import {ElMessageBox} from "element-plus";
+import {accountList} from '@/request/account.js';
 
 defineExpose({
   open,
@@ -136,6 +139,8 @@ const percent = ref(0)
 let percentMessage = null
 let sending = false
 const defValue = ref('')
+const senderAccounts = ref([])
+const senderLoading = ref(false)
 const contactsTabRef = ref({})
 const showContacts = ref(false)
 const mySelect = ref()
@@ -448,7 +453,7 @@ function openForward(email) {
     defValue.value = `
       ${sanitizeMailHtml(formatImage(email.content)).html || `<pre style="font-family: inherit;word-break: break-word;white-space: pre-wrap;margin: 0">${escapeMailText(email.text)}</pre>`}
     `
-    open()
+    open(email.accountId)
 
     nextTick(() => {
       backReply.content = editor.value.getContent()
@@ -489,7 +494,7 @@ function openReply(email) {
           ${sanitizeMailHtml(formatImage(email.content)).html || `<pre style="font-family: inherit;word-break: break-word;white-space: pre-wrap;margin: 0">${escapeMailText(email.text)}</pre>`}
       </article>
     </blockquote>`
-    open()
+    open(email.accountId)
 
     nextTick(() => {
       backReply.content = editor.value.getContent()
@@ -507,7 +512,33 @@ function formatImage(content) {
   return content.replace(/{{domain}}/g, toOssDomain(domain) + '/');
 }
 
-function open() {
+async function loadSenderAccounts() {
+  if (settingStore.domainList.length <= 1) return
+  senderLoading.value = true
+  try {
+    const accounts = []
+    let page
+    do {
+      const last = accounts.at(-1)
+      page = await accountList(last?.accountId || 0, 30, last?.sort)
+      accounts.push(...page)
+    } while (page.length === 30)
+    senderAccounts.value = accounts
+  }
+  catch { senderAccounts.value = [userStore.user.account] }
+  finally { senderLoading.value = false }
+}
+
+function changeSender(accountId) {
+  const account = senderAccounts.value.find(item => item.accountId === accountId)
+  if (!account) return
+  form.accountId = account.accountId
+  form.sendEmail = account.email
+  form.name = account.name
+}
+
+async function open(preferredAccountId = 0) {
+  await loadSenderAccounts()
   if (!accountStore.currentAccount.email) {
     form.sendEmail = userStore.user.email;
     form.accountId = userStore.user.account.accountId;
@@ -517,11 +548,13 @@ function open() {
     form.accountId = accountStore.currentAccount.accountId;
     form.name = accountStore.currentAccount.name;
   }
+  if (typeof preferredAccountId === 'number' && preferredAccountId > 0) changeSender(preferredAccountId)
   show.value = true;
   editor.value.focus()
 }
 
 function openDraft(draft) {
+  loadSenderAccounts()
   Object.assign(form, {...draft})
   defValue.value = ''
   setTimeout(() => defValue.value = form.content)
@@ -606,6 +639,7 @@ function close() {
 
 </script>
 <style>
+.sender-account-select {width:min(330px, 50vw);margin-left:8px}
 .write-select .el-select-dropdown__list {
   padding: 4px 4px !important;
 }

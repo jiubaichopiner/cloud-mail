@@ -317,6 +317,8 @@ let scrollTop = 0
 const latestEmail = ref(null)
 const scrollbarRef = ref(null)
 let reqLock = false
+let pendingRefresh = false
+let requestVersion = 0
 let isMobile = ref(innerWidth < 1367)
 let skeletonRows = 0
 const timePaddingRight = ref('');
@@ -797,7 +799,11 @@ function jumpDetails(email) {
 
 function getEmailList(refresh = false) {
 
-  if (reqLock) return;
+  if (reqLock) {
+    if (refresh) pendingRefresh = true;
+    return;
+  }
+  const version = requestVersion;
 
   let emailId = emailList.length > 0 ? emailList.at(-1).emailId : 0;
 
@@ -830,6 +836,7 @@ function getEmailList(refresh = false) {
     if (duration < 300 && !emailId) {
         await sleep(300 - duration)
     }
+    if (version !== requestVersion) return;
     firstLoad.value = false
 
     let list = data.list.map(item => ({
@@ -855,6 +862,10 @@ function getEmailList(refresh = false) {
   }).finally(() => {
     loading.value = false
     reqLock = false
+    if (pendingRefresh) {
+      pendingRefresh = false
+      getEmailList(true)
+    }
   })
 }
 
@@ -889,6 +900,7 @@ function refresh() {
 }
 
 function refreshList() {
+  requestVersion++
   checkAll.value = false;
   isIndeterminate.value = false;
   getEmailList(true);

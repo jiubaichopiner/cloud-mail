@@ -23,6 +23,7 @@ import domainUtils from '../utils/domain-uitls';
 import account from "../entity/account";
 import { att } from '../entity/att';
 import telegramService from './telegram-service';
+import { preloadMailImages } from './mail-privacy-service.js';
 
 const emailService = {
 
@@ -745,6 +746,9 @@ const emailService = {
 		for (const emailData of receiveEmailList) {
 
 			const emailRow = await orm(c).insert(email).values(emailData).returning().get();
+			if (c.env.unified_mode === 'true' && emailRow.content) {
+				c.executionCtx.waitUntil(preloadMailImages(c.env, emailRow.emailId, emailRow.content, fetch, emailUtils.getDomain(emailRow.toEmail)).catch(() => {}));
+			}
 
 			//设置附件保存
 			for (const attRow of attList) {

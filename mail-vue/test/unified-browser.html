@@ -1,0 +1,35 @@
+<!doctype html><meta charset="utf-8"><title>Unified mailbox switching regression</title>
+<pre id="result">Running…</pre><div id="app" style="height:600px"></div>
+<script>window.addEventListener('error', event => {window.unifiedError=event.message;document.querySelector('#result').textContent=event.message})</script>
+<script type="module">
+import {createApp, h, ref} from 'vue'
+import {createPinia, setActivePinia} from 'pinia'
+import i18n from '../src/i18n/index.js'
+const pinia = createPinia()
+setActivePinia(pinia)
+const {default: EmailScroll} = await import('../src/components/email-scroll/index.vue')
+const reader = ref()
+const pending = []
+const results = []
+const until = async test => {for(let i=0;i<60;i++){if(test())return;await new Promise(r=>setTimeout(r,50))}throw new Error('timeout')}
+function check(name, pass){results.push({name,pass:!!pass});if(!pass)throw new Error(name)}
+function data(id, subject){return {list:[{emailId:id,subject,name:'test',text:'test',createTime:'2026-10-14 00:00:00',type:0,status:0}],total:1,latestEmail:{emailId:id}}}
+const app = createApp({render:()=>h(EmailScroll,{ref:reader,getEmailList:()=>new Promise(resolve=>pending.push(resolve))})})
+app.use(pinia).use(i18n).mount('#app')
+async function run(){
+  await until(()=>reader.value&&pending.length===1)
+  reader.value.refreshList()
+  reader.value.refreshList()
+  pending[0](data(1,'OLD MAILBOX'))
+  await until(()=>pending.length===2)
+  check('refresh during an outstanding request is queued',pending.length===2)
+  check('stale mailbox response is discarded',reader.value.emailList.length===0)
+  pending[1](data(2,'COMBINED MAILBOX'))
+  await until(()=>reader.value.emailList.length===1)
+  check('latest requested mailbox is rendered',reader.value.emailList[0].emailId===2&&reader.value.total===1)
+  window.unifiedResults=results
+  document.querySelector('#result').textContent=JSON.stringify(results,null,2)
+  app.unmount()
+}
+run().catch(error=>{window.unifiedError=error.message;document.querySelector('#result').textContent=error.stack})
+</script>

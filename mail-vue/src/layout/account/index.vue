@@ -4,9 +4,19 @@
       <Icon v-perm="'account:add'" class="icon add" icon="ion:add-outline" width="23" height="23" @click="add"/>
       <Icon class="icon refresh" icon="ion:reload" width="18" height="18" @click="refresh"/>
     </div>
+    <div v-if="domainList.length > 1" class="unified-mailboxes">
+      <button type="button" class="all-mailboxes" :class="{active: accountStore.currentAccountId === 0}" @click="showAllAccounts">
+        全部邮箱 <span>合并查看所有地址的邮件</span>
+      </button>
+      <el-input v-model="accountSearch" placeholder="搜索邮箱地址" clearable size="small" />
+      <div class="mailbox-domain-filters">
+        <button type="button" :class="{active: !selectedDomain}" @click="selectedDomain = ''">全部</button>
+        <button v-for="domain in domainList" :key="domain" type="button" :class="{active: selectedDomain === domain}" @click="selectedDomain = domain">{{ domain.split('.').at(-1).toUpperCase() }}</button>
+      </div>
+    </div>
     <el-scrollbar class="scrollbar" ref="scrollbarRef">
       <div v-infinite-scroll="getAccountList" :infinite-scroll-distance="600" :infinite-scroll-immediate="false">
-        <el-card class="item" :class="itemBg(item.accountId)" v-for="(item, index) in accounts" :key="item.accountId"
+        <el-card class="item" :class="itemBg(item.accountId)" v-for="item in visibleAccounts" :key="item.accountId"
                  @click="changeAccount(item)">
           <div class="account">
             {{ item.email }}
@@ -25,7 +35,7 @@
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item v-if="hasPerm('email:send')" @click="openSetName(item)">{{ $t('rename') }}</el-dropdown-item>
-                    <el-dropdown-item v-if="item.accountId !== userStore.user.account.accountId" @click="setAsTop(item, index)">{{ $t('pin') }}</el-dropdown-item>
+                    <el-dropdown-item v-if="item.accountId !== userStore.user.account.accountId" @click="setAsTop(item, accounts.indexOf(item))">{{ $t('pin') }}</el-dropdown-item>
                     <el-dropdown-item v-if="item.accountId !== userStore.user.account.accountId && hasPerm('account:delete')"
                                       @click="remove(item)">{{ $t('delete') }}
                     </el-dropdown-item>
@@ -155,6 +165,14 @@ const showAdd = ref(false)
 const addLoading = ref(false);
 const domainList = computed(() => settingStore.domainList)
 const accounts = reactive([])
+const accountSearch = ref('')
+const selectedDomain = ref('')
+const visibleAccounts = computed(() => accounts.filter(item =>
+  (!selectedDomain.value || item.email.endsWith(selectedDomain.value)) &&
+  item.email.toLowerCase().includes(accountSearch.value.trim().toLowerCase())))
+watch([accountSearch, selectedDomain], () => {
+  if (accountSearch.value.trim() || selectedDomain.value) getAccountList()
+})
 const noLoading = ref(false)
 const loading = ref(false)
 const followLoading = ref(false);
@@ -345,6 +363,11 @@ function changeAccount(account) {
   accountStore.currentAccount = account
 }
 
+function showAllAccounts() {
+  accountStore.currentAccount = {...userStore.user.account, allReceive: 1}
+  accountStore.currentAccountId = 0
+}
+
 function add() {
   addForm.suffix = addForm.suffix || settingStore.domainList[0]
   showAdd.value = true
@@ -411,8 +434,9 @@ function getAccountList() {
     if (list.length < queryParams.size) {
       noLoading.value = true
     }
-    if (accounts.length === 0) {
-      accountStore.currentAccount = list[0]
+    if (accounts.length === 0 && first) {
+      if (domainList.value.length > 1) showAllAccounts()
+      else accountStore.currentAccount = list[0]
     }
 
     accounts.push(...list)
@@ -420,6 +444,7 @@ function getAccountList() {
     loading.value = false
     followLoading.value = false
     first = false
+    if (!noLoading.value && (accountSearch.value.trim() || selectedDomain.value)) getAccountList()
   }).catch(() => {
     loading.value = false
     followLoading.value = false
@@ -514,6 +539,15 @@ function submit() {
   })
 }
 </script>
+<style scoped>
+.unified-mailboxes {padding:0 10px 10px;display:grid;gap:9px}
+.all-mailboxes {width:100%;padding:10px 12px;text-align:left;border:1px solid var(--el-border-color);border-radius:9px;background:var(--el-bg-color);color:var(--el-text-color-primary);cursor:pointer;font-weight:600}
+.all-mailboxes span {display:block;margin-top:3px;font-size:11px;font-weight:400;color:var(--el-text-color-secondary)}
+.all-mailboxes.active {border-color:var(--el-color-primary);background:var(--el-color-primary-light-9)}
+.mailbox-domain-filters {display:flex;gap:5px}
+.mailbox-domain-filters button {flex:1;padding:4px;border:0;border-radius:5px;background:var(--el-fill-color-light);color:var(--el-text-color-secondary);font-size:11px;cursor:pointer}
+.mailbox-domain-filters button.active {background:var(--el-color-primary-light-8);color:var(--el-color-primary)}
+</style>
 <style>
 path[fill="#ffdda1"] {
   fill: #ffdd7d;
@@ -521,6 +555,8 @@ path[fill="#ffdda1"] {
 </style>
 <style scoped lang="scss">
 .account-box {
+  display: flex;
+  flex-direction: column;
 
   border-right: 1px solid var(--el-border-color) !important;
   background-color: var(--el-bg-color);
@@ -528,6 +564,7 @@ path[fill="#ffdda1"] {
   overflow: hidden;
 
   .head-opt {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     height: 38px;
@@ -554,11 +591,10 @@ path[fill="#ffdda1"] {
 
   .scrollbar {
     width: 100%;
-    height: calc(100% - 38px);
+    height: auto;
+    flex: 1;
+    min-height: 0;
     overflow: auto;
-    @media (max-width: 767px) {
-      height: calc(100% - 98px);
-    }
 
     .empty {
       display: flex;

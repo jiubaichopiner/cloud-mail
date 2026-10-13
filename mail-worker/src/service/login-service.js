@@ -19,6 +19,7 @@ import dayjs from 'dayjs';
 import { toUtc } from '../utils/date-uitil';
 import { t } from '../i18n/i18n.js';
 import verifyRecordService from './verify-record-service';
+import { resolveLoginIdentity } from './login-identity.js';
 
 const loginService = {
 
@@ -207,7 +208,7 @@ const loginService = {
 			throw new BizError(t('emailAndPwdEmpty'));
 		}
 
-		const userRow = await userService.selectByEmailIncludeDel(c, email);
+		const {userRow, credentials} = await resolveLoginIdentity(c, email, noVerifyPwd, userService);
 
 		if (!userRow) {
 			throw new BizError(t('notExistUser'));
@@ -221,7 +222,7 @@ const loginService = {
 			throw new BizError(t('isBanUser'));
 		}
 
-		if (!await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password) && !noVerifyPwd) {
+		if (!await cryptoUtils.verifyPassword(password, credentials.salt, credentials.password) && !noVerifyPwd) {
 			throw new BizError(t('IncorrectPwd'));
 		}
 

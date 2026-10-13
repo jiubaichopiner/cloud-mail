@@ -161,7 +161,7 @@ export async function email(message, env, ctx) {
 		// Start at receipt time, never when the recipient opens the message.
 		// Fail closed: image errors cannot change the SMTP delivery result.
 		if (emailRow?.emailId && emailRow.content && ctx?.waitUntil) {
-			ctx.waitUntil(Promise.resolve().then(() => preloadMailImages(env, emailRow.emailId, emailRow.content)).catch(() => {}));
+			ctx.waitUntil(Promise.resolve().then(() => preloadMailImages(env, emailRow.emailId, emailRow.content, fetch, emailUtils.getDomain(message.to))).catch(() => {}));
 		}
 
 
