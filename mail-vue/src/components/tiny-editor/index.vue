@@ -11,6 +11,7 @@ import loading from "@/components/loading/index.vue";
 import {useI18n} from 'vue-i18n'
 import {useUiStore} from '@/store/ui.js'
 import {useSettingStore} from '@/store/setting.js'
+import {sanitizeMailHtml} from '@/utils/mail-privacy.js'
 
 defineExpose({
   clearEditor,
@@ -49,7 +50,7 @@ onBeforeUnmount(() => {
 
 watch(() => props.defValue, (newValue) => {
   if (editor.value && editor.value.getContent() !== newValue) {
-    editor.value.setContent(newValue);
+    editor.value.setContent(sanitizeMailHtml(newValue, {allowBlob: true}).html);
   }
 });
 
@@ -89,6 +90,7 @@ function initEditor() {
   window.tinymce.init({
     selector: `#${props.editorId}`,
     statusbar: false,
+    content_security_policy: "default-src 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; media-src 'none'; form-action 'none'; base-uri 'none'",
     height: "100%",
     auto_focus: true,
     //relative_urls: false,  //阻止 img标签域名和网站域名相同 自动把链接转换相对路径
@@ -112,8 +114,11 @@ function initEditor() {
     noneditable_class: 'mceNonEditable',
     setup: (ed) => {
       editor.value = ed;
+      ed.on('BeforeSetContent', event => {
+        if (typeof event.content === 'string') event.content = sanitizeMailHtml(event.content, {allowBlob: true}).html;
+      });
       ed.on('init', () => {
-        ed.setContent(props.defValue);
+        ed.setContent(sanitizeMailHtml(props.defValue, {allowBlob: true}).html);
         isInitialized.value = true;
       });
       ed.on('input change', () => {
@@ -126,6 +131,9 @@ function initEditor() {
       })
     },
     autofocus: true,
+    paste_preprocess: (editor, args) => {
+      args.content = sanitizeMailHtml(args.content, {allowBlob: true}).html;
+    },
     branding: false,
     file_picker_types: 'image',
     image_dimensions: false,

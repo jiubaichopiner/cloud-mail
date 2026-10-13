@@ -1,0 +1,80 @@
+<!doctype html><meta charset="utf-8"><title>Mail privacy regression checks</title>
+<pre id="result">Running…</pre>
+<script type="module">
+import {sanitizeMailHtml, privateMailDocument, safeImageSource, escapeMailText} from '../src/utils/mail-privacy.js'
+import {createApp, h} from 'vue'
+import {createPinia} from 'pinia'
+import i18n from '../src/i18n/index.js'
+import ShadowHtml from '../src/components/shadow-html/index.vue'
+import TinyEditor from '../src/components/tiny-editor/index.vue'
+const trap = 'http://127.0.0.1:3218'
+const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aJVkAAAAASUVORK5CYII='
+const results=[]
+const isTrackerRequest = name => name.startsWith(trap) && !['/hits', '/control'].includes(new URL(name).pathname)
+function check(name,condition){results.push({name,pass:!!condition});if(!condition)throw new Error(name)}
+function frame(html){return new Promise(resolve=>{
+  const f=document.createElement('iframe');f.sandbox='allow-same-origin';f.srcdoc=html;f.onload=()=>resolve(f);document.body.append(f)
+})}
+window.runPrivacyChecks=async()=>{
+  check('network collector is reachable', (await fetch(`${trap}/control`)).ok)
+  const hostile=`<p style="color:red;padding:8px;background-image:url(${trap}/inline-css)">hello</p>
+  <img src="${trap}/pixel" width="1" height="1"><img src="${trap}/photo" alt="Photo">
+  <img srcset="${trap}/srcset 2x"><picture><source srcset="${trap}/picture"></picture>
+  <style>@import '${trap}/import';@font-face{font-family:attack;src:url(${trap}/font)}p{background:url(${trap}/css)}</style>
+  <link rel="stylesheet" href="${trap}/stylesheet"><iframe src="${trap}/frame"></iframe>
+  <object data="${trap}/object"></object><video poster="${trap}/poster"><source src="${trap}/video"></video>
+  <svg><image href="${trap}/svg"></image></svg><input type="image" src="${trap}/input">
+  <meta http-equiv="refresh" content="0;url=${trap}/refresh"><base href="${trap}/base">
+  <script>parent.__mailPrivacyExecuted=true;<\/script>
+  <img src="${trap}/events" onerror="parent.__mailPrivacyExecuted=true">
+  <a href="javascript:parent.__mailPrivacyExecuted=true" ping="${trap}/ping">unsafe</a>
+  <a href="https://example.com/verify" ping="${trap}/ping">Verify</a>
+  <img src="${png}" alt="embedded"><table><tr><td>layout</td></tr></table>`
+  const clean=sanitizeMailHtml(hostile)
+  check('remote and event-handler images are blocked',clean.blockedImages===3)
+  check('embedded raster image survives',clean.html.includes(png))
+  check('no tracking URL survives sanitization',!clean.html.includes(trap))
+  check('no active elements survive',!/<(?:script|style|iframe|svg|object|video|meta|base|form|link)\b/i.test(clean.html))
+  check('basic layout and inline formatting survive',clean.html.includes('<table>')&&clean.html.includes('color:red')&&clean.html.includes('padding-top:8px'))
+  check('links do not send referrer or ping',clean.html.includes('noopener noreferrer')&&!clean.html.includes('ping='))
+  check('SVG data URLs and arbitrary local paths blocked',!safeImageSource('data:image/svg+xml,<svg/>')&&!safeImageSource('/api/init/a')&&!safeImageSource('/attachments/'+ 'a'.repeat(32)+'.png?redirect=1'))
+  check('stored local image allowed',safeImageSource('/attachments/'+ 'a'.repeat(32)+'.png')==='/'+'attachments/'+ 'a'.repeat(32)+'.png')
+  check('plain-text quote is escaped',escapeMailText('<img src=x>')==='&lt;img src=x&gt;')
+  const f=await frame(privateMailDocument(clean.html))
+  check('frame has content-security-policy',f.contentDocument.querySelector('meta[http-equiv="Content-Security-Policy"]'))
+  // Defense in depth: even a sanitizer regression cannot fetch remote resources or execute scripts.
+  await frame(privateMailDocument(`<img src="${trap}/csp-image"><style>body{background:url(${trap}/csp-css)}</style><script>parent.__mailPrivacyExecuted=true;<\/script>`))
+  await new Promise(r=>setTimeout(r,600))
+  check('no script ran',!window.__mailPrivacyExecuted)
+  check('browser initiated no tracker requests',!performance.getEntriesByType('resource').some(e=>isTrackerRequest(e.name)))
+  const img=f.contentDocument.querySelector('img')
+  check('embedded image decoded',img?.complete&&img?.naturalWidth===1)
+  const readerHost=document.createElement('div');readerHost.style.width='600px';document.body.append(readerHost)
+  createApp({render:()=>h(ShadowHtml,{html:hostile})}).mount(readerHost)
+  await new Promise(r=>setTimeout(r,300))
+  check('real Vue reader displays privacy notice',readerHost.innerText.includes('隐私保护已开启'))
+  const reader=readerHost.querySelector('iframe')
+  check('real reader displays content and computes height',reader.contentDocument.body.innerText.includes('hello')&&reader.getBoundingClientRect().height>20)
+  readerHost.style.width='280px';await new Promise(r=>setTimeout(r,300))
+  check('reader adapts to narrow viewport',reader.getBoundingClientRect().width<=281)
+  const editorHost=document.createElement('div');editorHost.style.height='400px';document.body.append(editorHost)
+  const app=createApp({render:()=>h(TinyEditor,{defValue:hostile,editorId:'privacy-editor'})})
+  app.use(createPinia()).use(i18n).mount(editorHost)
+  const until=async(test)=>{for(let n=0;n<60;n++){if(test())return;await new Promise(r=>setTimeout(r,100))}throw new Error('editor init timeout')}
+  await until(()=>window.tinymce?.get('privacy-editor')?.initialized)
+  const editor=window.tinymce.get('privacy-editor')
+  check('reply/draft editor strips trackers before display',!editor.getContent().includes(trap)&&editor.getBody().innerText.includes('hello'))
+  editor.insertContent(`<img src="${trap}/editor-insert">`)
+  check('editor content insertion also strips trackers',!editor.getContent().includes(trap))
+  const pasted={content:`<img src="${trap}/paste"><div style="background:url(${trap}/paste-css)">paste</div>`}
+  editor.options.get('paste_preprocess')(editor,pasted)
+  check('paste strips external images and CSS',!pasted.content.includes(trap))
+  await new Promise(r=>setTimeout(r,400))
+  check('real components initiated no tracker requests',!performance.getEntriesByType('resource').some(e=>isTrackerRequest(e.name)))
+  const hits=await (await fetch(`${trap}/hits`)).json()
+  check('collector received zero email tracking requests',hits.every(path=>path==='/control'))
+  document.querySelector('#result').textContent=JSON.stringify(results,null,2)
+  return results
+}
+window.runPrivacyChecks().then(r=>window.privacyResults=r).catch(e=>{window.privacyError=e.message;document.querySelector('#result').textContent=e.stack})
+</script>

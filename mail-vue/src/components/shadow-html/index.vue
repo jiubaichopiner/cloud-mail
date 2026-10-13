@@ -1,124 +1,53 @@
 <template>
-  <div class="content-box" ref="contentBox">
-    <div ref="container" class="content-html"></div>
+  <div class="content-box">
+    <div class="privacy-notice" role="status">
+      <strong>隐私保护已开启</strong>
+      <span v-if="sanitized.blockedImages"> · 已拦截 {{ sanitized.blockedImages }} 张外部或不安全图片</span>
+      <div>外部图片、样式及跟踪资源不会自动加载。手动打开邮件链接后，目标网站仍可能进行跟踪。</div>
+    </div>
+    <iframe ref="frame" class="content-html" title="邮件正文（隐私保护）" :srcdoc="srcdoc"
+      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+      referrerpolicy="no-referrer" :style="{height: `${height}px`}" @load="observeContent" />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import {computed, ref, onBeforeUnmount} from 'vue'
+import {sanitizeMailHtml, privateMailDocument} from '@/utils/mail-privacy.js'
 
-const props = defineProps({
-  html: {
-    type: String,
-    required: true
-  }
-})
+const props = defineProps({html: {type: String, required: true}})
+const frame = ref(null)
+const height = ref(80)
+const sanitized = computed(() => sanitizeMailHtml(props.html))
+const srcdoc = computed(() => privateMailDocument(sanitized.value.html))
+let observer
 
-const container = ref(null)
-const contentBox = ref(null)
-let shadowRoot = null
-
-function updateContent() {
-  if (!shadowRoot) return;
-
-  // 1. 提取 <body> 的 style 属性（如果存在）
-  const bodyStyleRegex = /<body[^>]*style="([^"]*)"[^>]*>/i;
-  const bodyStyleMatch = props.html.match(bodyStyleRegex);
-  const bodyStyle = bodyStyleMatch ? bodyStyleMatch[1] : '';
-
-  // 2. 移除 <body> 标签（保留内容）
-  const cleanedHtml = props.html.replace(/<\/?body[^>]*>/gi, '');
-
-  // 3. 将 body 的 style 应用到 .shadow-content
-  shadowRoot.innerHTML = `
-    <style>
-      :host {
-        all: initial;
-        width: 100%;
-        height: 100%;
-        font-family: Inter, 'Helvetica Neue', Helvetica, 'PingFang SC',
-                    'Hiragino Sans GB', 'Microsoft YaHei', '微软雅黑', Arial, sans-serif;
-        font-size: 14px;
-        line-height: 1.5;
-        color: #13181D;
-        word-break: break-word;
-      }
-
-      h1, h2, h3, h4 {
-          font-size: 18px;
-          font-weight: 700;
-      }
-
-      p {
-        margin: 0;
-      }
-
-      a {
-        text-decoration: none;
-        color: #0E70DF;
-      }
-
-      .shadow-content {
-        background: #FFFFFF;
-        width: fit-content;
-        height: fit-content;
-        min-width: 100%;
-        ${bodyStyle ? bodyStyle : ''} /* 注入 body 的 style */
-      }
-
-      img:not(table img) {
-        max-width: 100%;
-        height: auto !important;
-      }
-
-    </style>
-    <div class="shadow-content">
-      ${cleanedHtml}
-    </div>
-  `;
+function resizeContent() {
+  const body = frame.value?.contentDocument?.querySelector('.mail-body')
+  if (!body) return
+  body.style.zoom = '1'
+  const ratio = Math.min(1, frame.value.clientWidth / Math.max(1, body.scrollWidth))
+  body.style.zoom = String(ratio)
+  const nextHeight = Math.ceil(body.getBoundingClientRect().height) + 4
+  if (height.value !== nextHeight) height.value = Math.max(24, nextHeight)
 }
 
-function autoScale() {
-  if (!shadowRoot || !contentBox.value) return
-
-  const parent = contentBox.value
-  const shadowContent = shadowRoot.querySelector('.shadow-content')
-
-  if (!shadowContent) return
-
-  const parentWidth = parent.offsetWidth
-  const childWidth = shadowContent.scrollWidth
-
-  if (childWidth === 0) return
-
-  const scale = parentWidth / childWidth
-
-  const hostElement = shadowRoot.host
-  hostElement.style.zoom = scale
+function observeContent() {
+  observer?.disconnect()
+  const body = frame.value?.contentDocument?.querySelector('.mail-body')
+  if (!body) return
+  observer = new ResizeObserver(resizeContent)
+  observer.observe(body)
+  observer.observe(frame.value)
+  resizeContent()
 }
 
-onMounted(() => {
-  shadowRoot = container.value.attachShadow({ mode: 'open' })
-  updateContent()
-  autoScale()
-})
-
-watch(() => props.html, () => {
-  updateContent()
-  autoScale()
-})
+onBeforeUnmount(() => observer?.disconnect())
 </script>
 
 <style scoped>
-.content-box {
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  font-family: Inter, "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "微软雅黑", Arial, sans-serif;
-}
-
-.content-html {
-  width: 100%;
-  height: 100%;
-}
+.content-box {width:100%;overflow:hidden}
+.privacy-notice {margin:0 0 12px;padding:10px 12px;border-radius:6px;background:var(--el-fill-color-light);color:var(--el-text-color-secondary);font-size:12px;line-height:1.6}
+.privacy-notice strong {color:var(--el-text-color-primary)}
+.content-html {display:block;width:100%;border:0;background:#fff}
 </style>
